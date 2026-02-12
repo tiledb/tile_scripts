@@ -1,0 +1,3 @@
+                    s_cis_gain 				<= p_cis_config_reg_in(1);  
+                    s_cis_bcid_charge 		<= p_cis_config_reg_in(13 downto 2);  
+                    s_cis_bcid_discharge 	<= p_cis_config_reg_in(25 downto 14);
