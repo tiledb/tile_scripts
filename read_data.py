@@ -1,105 +1,122 @@
 #!/usr/bin/env python3
-
 import time
 import Herakles
-from db_ppr_ipbus import IPbus   # adjust import path if needed
+from db_ppr_ipbus import *
+import plotext as tplt
 
-threshold = 0x11C
+# ------------------ CONFIG ------------------
 
-class color:
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    END = '\033[0m'
+HostIPaddressServer = "192.168.0.201"
+PPrIPaddressServer  = "192.168.0.2"
 
-# --------------------------------------------------
-# Connect
-# --------------------------------------------------
-ipb = IPbus(
-    controlhub_ipaddress="192.168.0.201",
-    ppr_ipaddress="192.168.0.2",
-    verbose=False
-)
+nsamp = 16
+nchanperMD = 12
+nMD = 4
+firstMD = 0
 
-# --------------------------------------------------
-# Read meta info
-# --------------------------------------------------
-meta = ipb.ReadVal(0x9F)
+bcid_l1a = 2246
 
-# Enable deadtime
-Reg5 = ipb.ReadVal(0x5)
-# ipb.RODConfigWrite(0x5, Reg5 | 0x8)
+# read_interval = 2.0  # seconds between read cycles
 
-# Read counters
-L1A          = ipb.ReadVal(0xA)
-EventNumber = ipb.ReadVal(0xB)
-bcid        = ipb.ReadVal(0x9D)
-ttype       = ipb.ReadVal(0x9F)
+# ------------------ FULL SAMPLE HEATMAP ------------------
 
-# --------------------------------------------------
-# Configure trigger type
-# --------------------------------------------------
-Reg3 = ipb.ReadVal(0x3)
-Reg3 &= 0xFF00FFFF
+def print_heatmap_hg_lg(md, hg_data, lg_data,
+                        nchanperMD=12,
+                        nsamp=16,
+                        vmin=0, vmax=4095):
 
-mytt = 0
-ena = 1
+    def value_to_color(val):
+        """
+        Map ADC value to 256-color background.
+        Blue → Green → Yellow → Red
+        """
+        val = max(vmin, min(vmax, val))
+        norm = (val - vmin) / (vmax - vmin)
+        color_code = int(21 + norm * (196 - 21))
+        return f"\033[48;5;{color_code}m"
 
-# ipb.RODConfigWrite(
-#     0x3,
-#     (ena << 31) | (mytt << 16) | Reg3
-# )
+    reset = "\033[0m"
 
-Reg3 = ipb.ReadVal(0x3)
+    # Header row
+    header = "Ch  | Gain | "
+    for s in range(nsamp):
+        header += f"{s:4d} "
+    print(header)
+    print("-" * len(header))
 
-print("Reg3:", hex(Reg3))
-print("L1As:", L1A, "EventNumber:", EventNumber,
-      "Trigger Type:", ttype, "Expected:", mytt)
+    # Channel rows (HG + LG)
+    for ch in range(nchanperMD):
+        idx = md * nchanperMD + ch
 
-print(
-    "Correct Trigger Type"
-    if ttype == mytt
-    else "Incorrect Trigger Type"
-)
+        # ---------- HG ----------
+        row = f"{ch:02d}  | HG   | "
+        for val in hg_data[idx]:
+            color = value_to_color(val)
+            row += f"{color}{val:4d}{reset} "
+        print(row)
 
-# --------------------------------------------------
-# Decode meta
-# --------------------------------------------------
-nsmp  = 16
-nchan = 1
+        # ---------- LG ----------
+        row = f"{ch:02d}  | LG   | "
+        for val in lg_data[idx]:
+            color = value_to_color(val)
+            row += f"{color}{val:4d}{reset} "
+        print(row)
 
-print(f"meta: 0x{meta:x}  nchan: {nchan}  nsamps: {nsmp}")
-
-# --------------------------------------------------
-# Read samples
-# --------------------------------------------------
-for chan in range(nchan):
-
-    # Raw read (same address logic as original)
-    samples = ipb.ipbus.Read(0x100 + (32 * chan), nsmp)
-
-    samplesLG = [(v & 0xFFF) for v in samples]
-    samplesHG = [((v >> 16) & 0xFFF) for v in samples]
-
-    print(f"\nChannel {chan+1}  BCID: {bcid}")
-
-    print("LG:", end=" ")
-    for s in samplesLG:
-        if s > threshold:
-            print(color.RED + f"{s:3d}" + color.END, end=" ")
-        else:
-            print(f"{s:3d}", end=" ")
     print()
 
-    print("HG:", end=" ")
-    for s in samplesHG:
-        if s > threshold:
-            print(color.GREEN + f"{s:3d}" + color.END, end=" ")
-        else:
-            print(f"{s:3d}", end=" ")
-    print()
+# ------------------ INITIALIZATION ------------------
 
-# --------------------------------------------------
-# Disable deadtime (optional)
-# --------------------------------------------------
-print("BCID:", ipb.ReadVal(0x9D))
-print("BCID+1:", ipb.ReadVal(0x9E))
+print(f"Connecting to PPr @ {PPrIPaddressServer}")
+ipbus = Herakles.Uhal(
+    f"tcp://{HostIPaddressServer}:10203?target={PPrIPaddressServer}:50001"
+)
+ppr = PPr(ipbus)
+feb = FEB(ppr)
+
+print(f"Connected. FW version: 0x{ppr.get_firmware_version():08X}")
+
+# X axis (sample index)
+step_x = list(range(nsamp))
+
+# ------------------ READOUT LOOP ------------------
+
+print("\nStarting continuous readout (Ctrl+C to stop)...\n")
+
+try:
+
+    # Send L1A trigger
+    feb.send_L1A(bcid_l1a, 3)
+
+    # Storage for this cycle
+    all_hg_data = [[] for _ in range(nchanperMD * nMD)]
+    all_lg_data = [[] for _ in range(nchanperMD * nMD)]
+
+    # Read all channels
+    for md in range(firstMD, firstMD + nMD):
+        for ch in range(nchanperMD):
+
+            hg = ppr.get_data_HG(md, ch, nsamp)
+            lg = ppr.get_data_LG(md, ch, nsamp)
+
+            idx = md * nchanperMD + ch
+            all_hg_data[idx] = list(hg)
+            all_lg_data[idx] = list(lg)
+
+    # Clear terminal
+    print("\033[H\033[J", end="")
+
+    # Print heatmaps
+    for md in range(firstMD, firstMD + nMD):
+        print(f"\n========== MD{md} HG / LG SAMPLE HEATMAP ==========")
+        print_heatmap_hg_lg(md,
+                            all_hg_data,
+                            all_lg_data,
+                            nchanperMD=nchanperMD,
+                            nsamp=nsamp,
+                            vmin=0,
+                            vmax=4095)
+
+
+
+except KeyboardInterrupt:
+    print("\nReadout stopped.")

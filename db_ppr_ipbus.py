@@ -624,12 +624,14 @@ class FEB:
             print(f"send_asyncFEcommand MD={md} DB={dbside}")
             print(f"ADDR=0x{addr:08X} CMD=0x{command:08X}")
 
-        return self.io.write(PPrReg.ASYNC_ADDRESS, addr, command)
+        self.io.write(PPrReg.ASYNC_ADDRESS, addr, command)
+        return True
 
     def send_asyncCIScommand(self, md: int, dbside: int, command: int) -> bool:
         addr = self._build_async_address(md, dbside)
         addr |= DBReg.DB_CIS
-        return self.io.write(PPrReg.ASYNC_ADDRESS, addr, command)
+        self.io.write(PPrReg.ASYNC_ADDRESS, addr, command)
+        return True
 
     # ========================================================
     # SYNC COMMANDS
@@ -670,10 +672,9 @@ class FEB:
     # ========================================================
 
     def _transmit_double(self, md, dbside, command_base):
-        if not self.send_asyncFEcommand(md, dbside, command_base):
-            return False
-        return self.send_asyncFEcommand(
-            md, dbside, command_base | DBReg.CMD_BIT_E_MASK)
+        self.send_asyncFEcommand(md, dbside, command_base)
+        self.send_asyncFEcommand(md, dbside, command_base | DBReg.CMD_BIT_E_MASK)
+        return True
 
     # ========================================================
     # CIS DAC
@@ -811,7 +812,8 @@ class FEB:
                    | (gain << 1)
                    | 0x1)
 
-        return self.send_asyncCIScommand(md, dbside, command)
+        self.send_asyncCIScommand(md, dbside, command)
+        return True
 
     # ========================================================
     # Pedestal conversions

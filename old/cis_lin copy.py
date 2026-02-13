@@ -115,72 +115,71 @@ def report_stats(name, data, nchanperMD):
         print(f"Ch{ch}: mean={mean:.3f}, std={std:.3f}")
 
 
-def read_md_data_with_retry(md, nsamp, nchanperMD, bcid_l1a, previous_hg_peaks=None, previous_lg_peaks=None,
+# ------------------ MD READ WITH RETRY -------------------
+
+def read_md_data_with_retry(md, nsamp, nchanperMD, bcid_l1a,
+                            previous_hg_peaks=None, previous_lg_peaks=None,
                             threshold=0.9, max_retries=3):
-    """
-    Reads all channels of an MD, retries if any peak is below threshold*previous_peak.
-    Returns:
-        hg_peaks, lg_peaks, hg_centers, lg_centers, hg_fwhm, lg_fwhm, hg_pedestal, lg_pedestal
-    """
+
+    ppr_read = ppr.read
+    get_HG   = ppr.get_data_HG
+    get_LG   = ppr.get_data_LG
+    send_L1A = feb.send_L1A
+
     retry = 0
     while retry <= max_retries:
-        hg_peaks_step = []
-        lg_peaks_step = []
-        hg_centers_step = []
-        lg_centers_step = []
-        hg_fwhm_step = []
-        lg_fwhm_step = []
-        hg_pedestal_step = []
-        lg_pedestal_step = []
 
-        # Send L1A before readout
-        feb.send_L1A(bcid_l1a, 3)
+        hg_peaks_step     = [0.0] * nchanperMD
+        lg_peaks_step     = [0.0] * nchanperMD
+        hg_centers_step   = [0.0] * nchanperMD
+        lg_centers_step   = [0.0] * nchanperMD
+        hg_fwhm_step      = [0.0] * nchanperMD
+        lg_fwhm_step      = [0.0] * nchanperMD
+        hg_pedestal_step  = [0.0] * nchanperMD
+        lg_pedestal_step  = [0.0] * nchanperMD
+
+        send_L1A(bcid_l1a, 3)
         time.sleep(0.05)
 
         for adc in range(nchanperMD):
-            hg_data = ppr.get_data_HG(md, adc, nsamp)
-            lg_data = ppr.get_data_LG(md, adc, nsamp)
+            hg_data = get_HG(md, adc, nsamp)
+            lg_data = get_LG(md, adc, nsamp)
 
-            hg_ped, hg_peak, hg_idx, hg_center, hg_width = analyze_pulse(hg_data)
-            lg_ped, lg_peak, lg_idx, lg_center, lg_width = analyze_pulse(lg_data)
+            hg_ped, hg_peak, _, hg_center, hg_width = analyze_pulse(hg_data)
+            lg_ped, lg_peak, _, lg_center, lg_width = analyze_pulse(lg_data)
 
-            hg_peaks_step.append(hg_peak)
-            lg_peaks_step.append(lg_peak)
-            hg_centers_step.append(hg_center)
-            lg_centers_step.append(lg_center)
-            hg_fwhm_step.append(hg_width)
-            lg_fwhm_step.append(lg_width)
-            hg_pedestal_step.append(hg_ped)
-            lg_pedestal_step.append(lg_ped)
+            hg_peaks_step[adc]     = hg_peak
+            lg_peaks_step[adc]     = lg_peak
+            hg_centers_step[adc]   = hg_center
+            lg_centers_step[adc]   = lg_center
+            hg_fwhm_step[adc]      = hg_width
+            lg_fwhm_step[adc]      = lg_width
+            hg_pedestal_step[adc]  = hg_ped
+            lg_pedestal_step[adc]  = lg_ped
 
-        # Read last L1ID and BCID
-        last_L1ID = ppr.read(PPrReg.LAST_EVT_L1ID)
-        last_BCID = ppr.read(PPrReg.LAST_EVT_BCID)
+        # Keep mandatory hardware reads
+        last_L1ID = ppr_read(PPrReg.LAST_EVT_L1ID)
+        last_BCID = ppr_read(PPrReg.LAST_EVT_BCID)
 
-        # Check if retry is needed
         retry_needed = False
         if previous_hg_peaks is not None:
             for ch in range(nchanperMD):
-                if hg_peaks_step[ch] < previous_hg_peaks[ch] * threshold or \
-                   lg_peaks_step[ch] < previous_lg_peaks[ch] * threshold:
+                if (hg_peaks_step[ch] < previous_hg_peaks[ch] * threshold or
+                    lg_peaks_step[ch] < previous_lg_peaks[ch] * threshold):
                     retry_needed = True
                     break
 
         if not retry_needed:
             return (hg_peaks_step, lg_peaks_step, hg_centers_step, lg_centers_step,
                     hg_fwhm_step, lg_fwhm_step, hg_pedestal_step, lg_pedestal_step)
-        else:
-            retry += 1
-            print(f"MD{md} retry {retry}/{max_retries} due to low peak(s)...")
-            time.sleep(0.05)
 
-    # If still failing after max_retries, return last readout anyway
+        retry += 1
+        print(f"MD{md} retry {retry}/{max_retries} due to low peak(s)...")
+        time.sleep(0.05)
+
     print(f"MD{md} reached max retries ({max_retries}), returning last readout")
     return (hg_peaks_step, lg_peaks_step, hg_centers_step, lg_centers_step,
             hg_fwhm_step, lg_fwhm_step, hg_pedestal_step, lg_pedestal_step)
-
-
-
 
 
 # ------------------ CONFIG ------------------
@@ -199,7 +198,7 @@ n_events = 1
 bcid_l1a = 2246
 BCID_charge = 500
 BCID_discharge = 2200
-gain = 1
+gain = 0
 
 ADCped = 100
 
@@ -222,14 +221,14 @@ print(f"Connected. FW version: 0x{ppr.get_firmware_version():08X}")
 
 step_x = []
 
-all_hg_peaks = []
-all_lg_peaks = []
-all_hg_centers = []
-all_lg_centers = []
-all_hg_fwhm = []
-all_lg_fwhm = []
-all_hg_pedestal = []
-all_lg_pedestal = []
+all_hg_peaks     = []
+all_lg_peaks     = []
+all_hg_centers   = []
+all_lg_centers   = []
+all_hg_fwhm      = []
+all_lg_fwhm      = []
+all_hg_pedestal  = []
+all_lg_pedestal  = []
 
 
 # ------------------ CONFIG PHASE -------------------
@@ -258,6 +257,9 @@ for md in range(firstMD, firstMD + nMD):
 
 print("\n==> Starting DACcharge sweep")
 
+ppr_read = ppr.read
+send_L1A = feb.send_L1A
+
 for step in range(nsteps):
 
     DACcharge = int(min_DAC_charge + step * step_length_DAC)
@@ -271,43 +273,43 @@ for step in range(nsteps):
 
     time.sleep(0.05)
 
-    hg_peaks_step = []
-    lg_peaks_step = []
-    hg_centers_step = []
-    lg_centers_step = []
-    hg_fwhm_step = []
-    lg_fwhm_step = []
-    hg_pedestal_step = []
-    lg_pedestal_step = []
+    hg_peaks_step     = []
+    lg_peaks_step     = []
+    hg_centers_step   = []
+    lg_centers_step   = []
+    hg_fwhm_step      = []
+    lg_fwhm_step      = []
+    hg_pedestal_step  = []
+    lg_pedestal_step  = []
 
     for event in range(n_events):
-        feb.send_L1A(bcid_l1a, 3)
+        send_L1A(bcid_l1a, 3)
         time.sleep(0.05)
 
         for md in range(firstMD, firstMD + nMD):
-            previous_hg = all_hg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step>0 else None
-            previous_lg = all_lg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step>0 else None
 
-            hg_peaks_step_md, lg_peaks_step_md, hg_centers_step_md, lg_centers_step_md, \
-            hg_fwhm_step_md, lg_fwhm_step_md, hg_pedestal_step_md, lg_pedestal_step_md = \
-                read_md_data_with_retry(md, nsamp, nchanperMD, bcid_l1a,
-                                        previous_hg_peaks=previous_hg,
-                                        previous_lg_peaks=previous_lg,
-                                        threshold=0.9, max_retries=0)
+            previous_hg = all_hg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step else None
+            previous_lg = all_lg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step else None
 
-            # Append MD data
-            hg_peaks_step.extend(hg_peaks_step_md)
-            lg_peaks_step.extend(lg_peaks_step_md)
-            hg_centers_step.extend(hg_centers_step_md)
-            lg_centers_step.extend(lg_centers_step_md)
-            hg_fwhm_step.extend(hg_fwhm_step_md)
-            lg_fwhm_step.extend(lg_fwhm_step_md)
-            hg_pedestal_step.extend(hg_pedestal_step_md)
-            lg_pedestal_step.extend(lg_pedestal_step_md)
+            (hg_p, lg_p, hg_c, lg_c,
+             hg_w, lg_w, hg_pd, lg_pd) = read_md_data_with_retry(
+                md, nsamp, nchanperMD, bcid_l1a,
+                previous_hg_peaks=previous_hg,
+                previous_lg_peaks=previous_lg,
+                threshold=0.9, max_retries=0
+            )
 
+            hg_peaks_step.extend(hg_p)
+            lg_peaks_step.extend(lg_p)
+            hg_centers_step.extend(hg_c)
+            lg_centers_step.extend(lg_c)
+            hg_fwhm_step.extend(hg_w)
+            lg_fwhm_step.extend(lg_w)
+            hg_pedestal_step.extend(hg_pd)
+            lg_pedestal_step.extend(lg_pd)
 
-        last_L1ID = ppr.read(PPrReg.LAST_EVT_L1ID)
-        last_BCID = ppr.read(PPrReg.LAST_EVT_BCID)
+        last_L1ID = ppr_read(PPrReg.LAST_EVT_L1ID)
+        last_BCID = ppr_read(PPrReg.LAST_EVT_BCID)
 
     all_hg_peaks.append(hg_peaks_step)
     all_lg_peaks.append(lg_peaks_step)

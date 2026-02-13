@@ -126,7 +126,7 @@ PPrIPaddressServer = "192.168.0.2"
 verbose = True
 nsamp = 16
 nchanperMD = 12
-nMD = 1
+nMD = 4
 firstMD = 0
 step_events = 1
 

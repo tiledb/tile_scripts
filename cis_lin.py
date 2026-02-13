@@ -1,241 +1,388 @@
 #!/usr/bin/env python3
-
-# tilecal libs
-from db_lib import *
-from db_ppr_ipbus import *
-
-# python libs
-import sys
 import time
-import datetime
 import os
-from optparse import OptionParser
 import Herakles
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from array import array
+from db_ppr_ipbus import PPr, FEB, PPrReg
 
-# -------------------------------------------------
-# Terminal color helpers
-# -------------------------------------------------
-def color_text(value, max_val, color='green'):
+import plotext as tplt
+import math
+import numpy as np  # still needed for averaging stats
+
+# -----Scientific functions-----
+
+def analyze_pulse(samples,
+                  pedestal_samples=4,
+                  noise_sigma_threshold=5,
+                  threshold_fraction=0.5):
+
+    if not samples or len(samples) < pedestal_samples + 2:
+        return 0, 0, 0, 0, 0
+
+    pedestal_region = samples[:pedestal_samples]
+    pedestal = sum(pedestal_region) / pedestal_samples
+
+    variance = sum((x - pedestal) ** 2 for x in pedestal_region) / pedestal_samples
+    noise_sigma = math.sqrt(variance)
+
+    signal = [x - pedestal for x in samples]
+
+    peak_value = max(signal)
+    peak_index = signal.index(peak_value)
+
+    if noise_sigma == 0 or peak_value < noise_sigma_threshold * noise_sigma:
+        return pedestal, 0, 0, 0, 0
+
+    total = sum(signal)
+    center_of_mass = sum(i * v for i, v in enumerate(signal)) / total if total > 0 else 0
+
+    half_max = peak_value * threshold_fraction
+    above_half = [i for i, v in enumerate(signal) if v >= half_max]
+    fwhm = above_half[-1] - above_half[0] if len(above_half) >= 2 else 0
+
+    return pedestal, peak_value, peak_index, center_of_mass, fwhm
+
+
+# ------------------ ASCII GRID PLOTS -------------------
+
+def ascii_plot_grid(step_x, all_hg_peaks, all_lg_peaks, nchanperMD=12, ncols=6, nrows=2, width=20, height=10):
+    plots = []
+    for ch in range(nchanperMD):
+        tplt.clear_figure()
+        hg_y = [all_hg_peaks[s][ch] for s in range(len(all_hg_peaks))]
+        lg_y = [all_lg_peaks[s][ch] for s in range(len(all_lg_peaks))]
+
+        tplt.plot(step_x, hg_y, label="", color="red")
+        tplt.plot(step_x, lg_y, label="", color="green")
+        tplt.title(f"Ch{ch}")
+        tplt.plotsize(width, height)
+        plot_str = tplt.build()
+        plots.append(plot_str.splitlines())
+
+    for i in range(len(plots)):
+        while len(plots[i]) < height:
+            plots[i].append(" " * width)
+
+    for row_idx in range(nrows):
+        row_plots = plots[row_idx*ncols : (row_idx+1)*ncols]
+        for line_idx in range(height):
+            print("  ".join(p[line_idx] for p in row_plots))
+        print("\n")
+
+
+# ------------------ LINEAR FIT FUNCTION -------------------
+
+def linear_fit(x, y):
     """
-    Return colored string for terminal:
-    Higher values are darker (bold)
+    Returns slope, intercept, R2, max deviation
     """
-    intensity = int((value / max_val) * 255)
-    intensity = min(255, max(0, intensity))
-    if color == 'green':
-        return f"\033[38;2;0;{intensity};0m{value:4}\033[0m"
-    elif color == 'red':
-        return f"\033[38;2;{intensity};0;0m{value:4}\033[0m"
-    else:
-        return str(value)
+    n = len(x)
+    mean_x = sum(x) / n
+    mean_y = sum(y) / n
 
-def ascii_bar(value, max_val, length=20):
-    filled = int((value / max_val) * length)
-    return '█' * filled + '-' * (length - filled)
+    # slope
+    num = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
+    den = sum((x[i] - mean_x) ** 2 for i in range(n))
+    slope = num / den if den != 0 else 0
 
-# -------------------------------------------------
-# Filename & plot folder
-# -------------------------------------------------
-now = datetime.datetime.now()
-filename = "cis" + now.strftime("_date_%Y-%m-%d_time_%H-%M") + ".root"
+    # intercept
+    intercept = mean_y - slope * mean_x
 
-# -------------------------------------------------
-# Options
-# -------------------------------------------------
-parser = OptionParser()
-parser.add_option("-c", "--channel", dest="channel")
-parser.add_option("-p", "--plotdir", dest="plotdir", help="Directory to save plots")
-parser.add_option("-s", "--samples", dest="samples")
-parser.add_option("-b", "--bcid", dest="bcid")
-parser.add_option("--ppripaddress", dest="ppripaddress")
-parser.add_option("--hostipaddress", dest="hostipaddress")
+    # predictions
+    y_fit = [slope * xi + intercept for xi in x]
 
-(options, args) = parser.parse_args()
+    # R^2
+    ss_tot = sum((yi - mean_y) ** 2 for yi in y)
+    ss_res = sum((y[i] - y_fit[i]) ** 2 for i in range(n))
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
 
-plotdir = options.plotdir or "./plots/cis"
-os.makedirs(plotdir, exist_ok=True)
+    # max deviation
+    max_dev = max(abs(y[i] - y_fit[i]) for i in range(n))
 
-# -------------------------------------------------
-# IP addresses
-# -------------------------------------------------
-PPrIPaddressServer = options.ppripaddress or "192.168.0.2"
-HostIPaddressServer = options.hostipaddress or "192.168.0.201"
+    return slope, intercept, r2, max_dev
+
+
+# ------------------ STATISTICS -------------------
+
+def avg_std(data):
+    arr = np.array(data)
+    return np.mean(arr), np.std(arr)
+
+def report_stats(name, data, nchanperMD):
+    print(f"\n-- {name} --")
+    for ch in range(nchanperMD):
+        mean, std = avg_std(data[:, ch])
+        print(f"Ch{ch}: mean={mean:.3f}, std={std:.3f}")
+
+
+def read_md_data_with_retry(md, nsamp, nchanperMD, bcid_l1a, previous_hg_peaks=None, previous_lg_peaks=None,
+                            threshold=0.9, max_retries=3):
+    """
+    Reads all channels of an MD, retries if any peak is below threshold*previous_peak.
+    Returns:
+        hg_peaks, lg_peaks, hg_centers, lg_centers, hg_fwhm, lg_fwhm, hg_pedestal, lg_pedestal
+    """
+    retry = 0
+    while retry <= max_retries:
+        hg_peaks_step = []
+        lg_peaks_step = []
+        hg_centers_step = []
+        lg_centers_step = []
+        hg_fwhm_step = []
+        lg_fwhm_step = []
+        hg_pedestal_step = []
+        lg_pedestal_step = []
+
+        # Send L1A before readout
+        feb.send_L1A(bcid_l1a, 3)
+        time.sleep(0.05)
+
+        for adc in range(nchanperMD):
+            hg_data = ppr.get_data_HG(md, adc, nsamp)
+            lg_data = ppr.get_data_LG(md, adc, nsamp)
+
+            hg_ped, hg_peak, hg_idx, hg_center, hg_width = analyze_pulse(hg_data)
+            lg_ped, lg_peak, lg_idx, lg_center, lg_width = analyze_pulse(lg_data)
+
+            hg_peaks_step.append(hg_peak)
+            lg_peaks_step.append(lg_peak)
+            hg_centers_step.append(hg_center)
+            lg_centers_step.append(lg_center)
+            hg_fwhm_step.append(hg_width)
+            lg_fwhm_step.append(lg_width)
+            hg_pedestal_step.append(hg_ped)
+            lg_pedestal_step.append(lg_ped)
+
+        # Read last L1ID and BCID
+        last_L1ID = ppr.read(PPrReg.LAST_EVT_L1ID)
+        last_BCID = ppr.read(PPrReg.LAST_EVT_BCID)
+
+        # Check if retry is needed
+        retry_needed = False
+        if previous_hg_peaks is not None:
+            for ch in range(nchanperMD):
+                if hg_peaks_step[ch] < previous_hg_peaks[ch] * threshold or \
+                   lg_peaks_step[ch] < previous_lg_peaks[ch] * threshold:
+                    retry_needed = True
+                    break
+
+        if not retry_needed:
+            return (hg_peaks_step, lg_peaks_step, hg_centers_step, lg_centers_step,
+                    hg_fwhm_step, lg_fwhm_step, hg_pedestal_step, lg_pedestal_step)
+        else:
+            retry += 1
+            print(f"MD{md} retry {retry}/{max_retries} due to low peak(s)...")
+            time.sleep(0.05)
+
+    # If still failing after max_retries, return last readout anyway
+    print(f"MD{md} reached max retries ({max_retries}), returning last readout")
+    return (hg_peaks_step, lg_peaks_step, hg_centers_step, lg_centers_step,
+            hg_fwhm_step, lg_fwhm_step, hg_pedestal_step, lg_pedestal_step)
+
+
+
+
+
+# ------------------ CONFIG ------------------
+
+HostIPaddressServer = "192.168.0.201"
+PPrIPaddressServer = "192.168.0.2"
+
+# ------------------ INITIALIZATION -------------------
 
 print(f"Connecting to PPr @ {PPrIPaddressServer}")
-ppr = IPbus(HostIPaddressServer, PPrIPaddressServer)
+ipbus = Herakles.Uhal(f"tcp://{HostIPaddressServer}:10203?target={PPrIPaddressServer}:50001")
+ppr = PPr(ipbus)
+feb = FEB(ppr)
+print(f"Connected. FW version: 0x{ppr.get_firmware_version():08X}")
 
-fw = ppr.ReadVal(1)
-print(f"Connected. FW version: {hex(fw)}")
 
-# -------------------------------------------------
-# Constants
-# -------------------------------------------------
-BCID_discharge = 2200
-BCID_charge = 500
-bcid_l1a = BCID_discharge + 44
+nsamp = 16
+nchanperMD = 12
+nMD = 2
+firstMD = 0
+dbside = 0
 
-Gain_cis = 0
 
-if options.bcid:
-    bcid_l1a = format_number(options.bcid)
+def cis_lin_readout(ppr, feb, gain=0, nsamp=16, nchanperMD=12, nMD=2, firstMD=0, dbside=0):
 
-the_channel = format_number(options.channel) if options.channel else -1
 
-pedestalDAC = 10
-offset = 0
-nsteps = 50  # Number of steps from 0 to 4096
-step = 4096 // nsteps
-configured_heights = [i * step for i in range(nsteps)]
+    n_events = 1
 
-nchan = 12
-md = 0
+    bcid_l1a = 2246
+    BCID_charge = 500
+    BCID_discharge = 2200
 
-nsamp = ppr.ReadVal(0x9F) & 0xFF
-if options.samples:
-    nsamp = format_number(options.samples)
-if nsamp == 0:
-    nsamp = 16
+    ADCped = 100
 
-# -------------------------------------------------
-# Disable external TTC, enable internal
-# -------------------------------------------------
-ppr.RODConfigWrite(0x2, 0x87)
-ppr.RODConfigWrite(0x4, 0x0)
-ppr.RODConfigWrite(0x5, 0x0)
+    nsteps = 40
+    max_DAC_charge = 4095
+    min_DAC_charge = 0
+    step_length_DAC = (max_DAC_charge - min_DAC_charge) / (nsteps - 1)
 
-DisableDCS = 1
-ConfigDCS = (DisableDCS << 17)
-ppr.RODConfigWrite(0x6, ConfigDCS)
+    step_x = []
 
-# -------------------------------------------------
-# Pedestal constants
-# -------------------------------------------------
-stableP = 0
-stableM = 2210
+    all_hg_peaks = []
+    all_lg_peaks = []
+    all_hg_centers = []
+    all_lg_centers = []
+    all_hg_fwhm = []
+    all_lg_fwhm = []
+    all_hg_pedestal = []
+    all_lg_pedestal = []
 
-# -------------------------------------------------
-# Enable CIS (basic setup, same for all steps)
-# -------------------------------------------------
-BCIDcharge = BCID_charge << 2
-BCIDdischarge = BCID_discharge << 14
-CIS_Enable = 1
-CIS_Gain = Gain_cis << 1
-cfb_cis_config = 0x0  # define properly if needed
 
-ppr.AsyncWrite(md, cfb_cis_config,
-               BCIDdischarge + BCIDcharge + CIS_Gain + CIS_Enable)
+    # ------------------ CONFIG PHASE -------------------
 
-# -------------------------------------------------
-# Arrays to store measured heights
-# -------------------------------------------------
-measured_HG = [[0]*nsteps for _ in range(nchan)]
-measured_LG = [[0]*nsteps for _ in range(nchan)]
+    ppr.set_global_TTC_internal()
+    DACbiasP, DACbiasN = feb.convert_ped_ADC_to_DACs(ADCped)
 
-# -------------------------------------------------
-# Sweep pulse heights
-# -------------------------------------------------
-for idx, cfg_height in enumerate(configured_heights):
-    print(f"\n=== Configured pulse height {cfg_height} ({idx+1}/{nsteps}) ===")
+    for md in range(firstMD, firstMD + nMD):
+        for feb_id in range(nchanperMD):
+            feb.set_ped_HG_pos(md, dbside, feb_id, DACbiasP)
+            feb.set_ped_HG_neg(md, dbside, feb_id, DACbiasN)
+            feb.set_ped_LG_pos(md, dbside, feb_id, DACbiasP)
+            feb.set_ped_LG_neg(md, dbside, feb_id, DACbiasN)
+            feb.load_ped_HG(md, dbside, feb_id)
+            feb.load_ped_LG(md, dbside, feb_id)
+
+    for md in range(firstMD, firstMD + nMD):
+        for adc in range(nchanperMD):
+            feb.set_switches_noise(md, dbside, feb=adc)
+
+    for md in range(firstMD, firstMD + nMD):
+        feb.set_CIS_BCID_settings(md, dbside, BCID_charge, BCID_discharge, gain)
+
+
+    # ------------------ DACcharge SWEEP -------------------
+
+    print("\n==> Starting DACcharge sweep")
+
+    for step in range(nsteps):
+
+        DACcharge = int(min_DAC_charge + step * step_length_DAC)
+        step_x.append(DACcharge)
+
+        print(f"Step {step+1}/{nsteps}  DACcharge = {DACcharge}")
+
+        for md in range(firstMD, firstMD + nMD):
+            for feb_id in range(nchanperMD):
+                feb.set_CIS_DAC(md, dbside, feb_id, DACcharge)
+
+        time.sleep(0.05)
+
+        hg_peaks_step = []
+        lg_peaks_step = []
+        hg_centers_step = []
+        lg_centers_step = []
+        hg_fwhm_step = []
+        lg_fwhm_step = []
+        hg_pedestal_step = []
+        lg_pedestal_step = []
+
+        for event in range(n_events):
+            feb.send_L1A(bcid_l1a, 3)
+            time.sleep(0.05)
+
+            for md in range(firstMD, firstMD + nMD):
+                previous_hg = all_hg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step>0 else None
+                previous_lg = all_lg_peaks[-1][md*nchanperMD:(md+1)*nchanperMD] if step>0 else None
+
+                hg_peaks_step_md, lg_peaks_step_md, hg_centers_step_md, lg_centers_step_md, \
+                hg_fwhm_step_md, lg_fwhm_step_md, hg_pedestal_step_md, lg_pedestal_step_md = \
+                    read_md_data_with_retry(md, nsamp, nchanperMD, bcid_l1a,
+                                            previous_hg_peaks=previous_hg,
+                                            previous_lg_peaks=previous_lg,
+                                            threshold=0.9, max_retries=0)
+
+                # Append MD data
+                hg_peaks_step.extend(hg_peaks_step_md)
+                lg_peaks_step.extend(lg_peaks_step_md)
+                hg_centers_step.extend(hg_centers_step_md)
+                lg_centers_step.extend(lg_centers_step_md)
+                hg_fwhm_step.extend(hg_fwhm_step_md)
+                lg_fwhm_step.extend(lg_fwhm_step_md)
+                hg_pedestal_step.extend(hg_pedestal_step_md)
+                lg_pedestal_step.extend(lg_pedestal_step_md)
+
+
+            last_L1ID = ppr.read(PPrReg.LAST_EVT_L1ID)
+            last_BCID = ppr.read(PPrReg.LAST_EVT_BCID)
+
+        all_hg_peaks.append(hg_peaks_step)
+        all_lg_peaks.append(lg_peaks_step)
+        all_hg_centers.append(hg_centers_step)
+        all_lg_centers.append(lg_centers_step)
+        all_hg_fwhm.append(hg_fwhm_step)
+        all_lg_fwhm.append(lg_fwhm_step)
+        all_hg_pedestal.append(hg_pedestal_step)
+        all_lg_pedestal.append(lg_pedestal_step)
     
-    for adc in range(nchan):
-        FPGA = (adc // 6 << 1) + (adc % 2)
-        card = (adc // 2) % 3
-        
-        chargeP = stableP #+ cfg_height
-        chargeM = stableM - cfg_height
+    return step_x, all_hg_peaks, all_lg_peaks, all_hg_centers, all_lg_centers, all_hg_fwhm, all_lg_fwhm, all_hg_pedestal, all_lg_pedestal
 
-        for base, value in [(0x6000, chargeP), (0x7000, chargeM),
-                            (0x4000, chargeP), (0x5000, chargeM)]:
-            ppr.AsyncWrite(md, 0x1, 0x8000000)
-            time.sleep(0.0001)
-            ppr.AsyncWrite(md, 0x1, (1 << 22) + (FPGA << 18) + (card << 16) + base + int(value))
-            time.sleep(0.0001)
-            ppr.AsyncWrite(md, 0x1, 0x8000000)
+step_x, all_hg_peaks, all_lg_peaks, all_hg_centers, all_lg_centers, all_hg_fwhm, all_lg_fwhm, all_hg_pedestal, all_lg_pedestal \
+    = cis_lin_readout(ppr, feb, gain=1, nsamp=nsamp, nchanperMD=nchanperMD, nMD=nMD, firstMD=firstMD, dbside=dbside)
 
-        # Load LG / HG
-        for load in [0xC000, 0xD000]:
-            ppr.AsyncWrite(md, 0x1, 0x80000000)
-            time.sleep(0.0001)
-            ppr.AsyncWrite(md, 0x1, (1 << 22) + (FPGA << 18) + (card << 16) + load)
-            time.sleep(0.0001)
 
-    # Trigger readout
-    ppr.SyncClear()
-    ppr.SyncRest()
-    ppr.RODWrite(bcid_l1a & 0xFFF, 0x3)
-    ppr.SyncLoop(0)
-    ppr.SyncClear()
-    ppr.SyncRest()
+# ------------------ ASCII LINEARITY PLOTS -------------------
 
-    the_data = ppr.RODReadMD(md=0, nchan=nchan, nsamp=nsamp, stride=32)
+for md in range(firstMD, firstMD + nMD):
+    print(f"\n==> MD{md} Linearity")
+    step_hg_peaks = [all_hg_peaks[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_peaks))]
+    step_lg_peaks = [all_lg_peaks[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_peaks))]
+    ascii_plot_grid(step_x, step_hg_peaks, step_lg_peaks, nchanperMD=nchanperMD, ncols=6, nrows=2, width=20, height=10) 
+    print(f"\n==> MD{md} Centers")
+    step_hg_centers = [all_hg_centers[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_centers))]
+    step_lg_centers = [all_lg_centers[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_centers))]
+    ascii_plot_grid(step_x, step_hg_centers, step_lg_centers, nchanperMD=nchanperMD, ncols=6, nrows=2, width=20, height=10) 
+    print(f"\n==> MD{md} FWHM")
+    step_hg_fwhm = [all_hg_fwhm[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_fwhm))]
+    step_lg_fwhm = [all_lg_fwhm[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_fwhm))]
+    ascii_plot_grid(step_x, step_hg_fwhm, step_lg_fwhm, nchanperMD=nchanperMD, ncols=6, nrows=2, width=20, height=10)
+    print(f"\n==> MD{md} Pedestal")
+    step_hg_pedestal = [all_hg_pedestal[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_pedestal))]
+    step_lg_pedestal = [all_lg_pedestal[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_pedestal))]
+    ascii_plot_grid(step_x, step_hg_pedestal, step_lg_pedestal, nchanperMD=nchanperMD, ncols=6, nrows=2, width=20, height=10)
 
-    # Extract and display pulse heights
-    max_val = 0xFFF
-    for ch in range(nchan):
-        hg = [(word >> 16) & 0xFFF for word in the_data[ch]]
-        lg = [word & 0xFFF for word in the_data[ch]]
-        baseline_hg = hg[0]
-        baseline_lg = lg[0]
-        height_hg = max(hg) - baseline_hg
-        height_lg = max(lg) - baseline_lg
-        measured_HG[ch][idx] = height_hg
-        measured_LG[ch][idx] = height_lg
 
-        # Terminal ASCII display
-        hg_str = color_text(height_hg, max_val, 'red')
-        lg_str = color_text(height_lg, max_val, 'green')
-        hg_bar = ascii_bar(height_hg, max_val)
-        lg_bar = ascii_bar(height_lg, max_val)
-        print(f"Ch {ch:02d} | HG: {hg_str} {hg_bar} | LG: {lg_str} {lg_bar}")
+# ------------------ LINEAR FIT AND STATISTICS -------------------
+print("\n\n==> Compact Summary of linear fits and stats\n")
 
-# -------------------------------------------------
-# Plot configured vs measured heights
-# -------------------------------------------------
-fig = make_subplots(
-    rows=2, cols=6,
-    subplot_titles=[f"Ch {i}" for i in range(nchan)],
-    horizontal_spacing=0.05, vertical_spacing=0.12
-)
+for md in range(firstMD, firstMD + nMD):
+    print(f"\n==> MD{md} summary")
 
-for ch in range(nchan):
-    row = 1 if ch < 6 else 2
-    col = (ch % 6) + 1
-    fig.add_trace(
-        go.Scatter(
-            x=configured_heights,
-            y=measured_HG[ch],
-            mode='lines+markers',
-            name='HG',
-            line=dict(color='red')
-        ),
-        row=row, col=col
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=configured_heights,
-            y=measured_LG[ch],
-            mode='lines+markers',
-            name='LG',
-            line=dict(color='green')
-        ),
-        row=row, col=col
-    )
+    step_hg_peaks = np.array([all_hg_peaks[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_peaks))])
+    step_lg_peaks = np.array([all_lg_peaks[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_peaks))])
+    
+    step_hg_centers = np.array([all_hg_centers[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_centers))])
+    step_lg_centers = np.array([all_lg_centers[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_centers))])
+    
+    step_hg_fwhm = np.array([all_hg_fwhm[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_fwhm))])
+    step_lg_fwhm = np.array([all_lg_fwhm[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_fwhm))])
+    
+    step_hg_pedestal = np.array([all_hg_pedestal[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_hg_pedestal))])
+    step_lg_pedestal = np.array([all_lg_pedestal[s][md * nchanperMD:(md + 1) * nchanperMD] for s in range(len(all_lg_pedestal))])
 
-fig.update_layout(
-    height=700, width=1800,
-    title_text="CIS Configured vs Measured Pulse Heights",
-    showlegend=True,
-    legend=dict(
-        orientation="h",
-        yanchor="bottom",
-        y=-0.2,
-        xanchor="center",
-        x=0.5
-    )
-)
+    # Print header
+    header = f"{'Ch':>2} | {'HG slope':>8} {'HG int':>8} {'HG R2':>6} {'HG maxDev':>10} | {'LG slope':>8} {'LG int':>8} {'LG R2':>6} {'LG maxDev':>10} | HG center±std | LG center±std | HG FWHM±std | LG FWHM±std | HG ped±std | LG ped±std"
+    print(header)
+    print("-" * len(header))
 
-plot_file = os.path.join(plotdir, f"CIS_sweep_{now.strftime('%Y%m%d_%H%M')}.html")
-fig.write_html(plot_file)
-print(f"\nPlot saved to {plot_file}")
+    for ch in range(nchanperMD):
+        # linear fit HG
+        hg_slope, hg_intercept, hg_r2, hg_max_dev = linear_fit(step_x, step_hg_peaks[:, ch])
+        # linear fit LG
+        lg_slope, lg_intercept, lg_r2, lg_max_dev = linear_fit(step_x, step_lg_peaks[:, ch])
+        # averages and stds
+        hg_center_mean, hg_center_std = avg_std(step_hg_centers[:, ch])
+        lg_center_mean, lg_center_std = avg_std(step_lg_centers[:, ch])
+        hg_fwhm_mean, hg_fwhm_std = avg_std(step_hg_fwhm[:, ch])
+        lg_fwhm_mean, lg_fwhm_std = avg_std(step_lg_fwhm[:, ch])
+        hg_ped_mean, hg_ped_std = avg_std(step_hg_pedestal[:, ch])
+        lg_ped_mean, lg_ped_std = avg_std(step_lg_pedestal[:, ch])
+
+        print(f"{ch:>2} | {hg_slope:8.2f} {hg_intercept:8.2f} {hg_r2:6.3f} {hg_max_dev:10.2f} | "
+              f"{lg_slope:8.2f} {lg_intercept:8.2f} {lg_r2:6.3f} {lg_max_dev:10.2f} | "
+              f"{hg_center_mean:.2f}±{hg_center_std:.2f} | {lg_center_mean:.2f}±{lg_center_std:.2f} | "
+              f"{hg_fwhm_mean:.2f}±{hg_fwhm_std:.2f} | {lg_fwhm_mean:.2f}±{lg_fwhm_std:.2f} | "
+              f"{hg_ped_mean:.2f}±{hg_ped_std:.2f} | {lg_ped_mean:.2f}±{lg_ped_std:.2f}")
