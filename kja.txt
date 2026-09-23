@@ -1,0 +1,50 @@
+adc=0 LGsamples= 106 107 106 107 107 107 106 106
+                 108 106 109 107 106 106 108 106
+adc=0 HGsamples= 111 10e 10f 10e 10f 10e 110 10d
+                 112 10d 10f 10c 10c 110 10e 10c
+adc=1 LGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=1 HGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=2 LGsamples= fa fc fe fc fd fe fe ff
+                 fc fc fd fe fe fd fc fd
+adc=2 HGsamples= fe ff fd f8 100 fe fd fa
+                 f6 fe fd ff fa f9 fa fb
+adc=3 LGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=3 HGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=4 LGsamples= 102 102 104 102 104 103 103 104
+                 102 101 103 101 100 102 103 103
+adc=4 HGsamples= 108 100 104 10a 106 103 106 108
+                 107 108 108 109 105 10c 10a 106
+adc=5 LGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=5 HGsamples= fff fff fff fff fff fff fff fff
+                 fff fff fff fff fff fff fff fff
+adc=6 LGsamples= fd ff fc fe ff fe fd fe
+                 ff fc fc ff fe fd fd fd
+adc=6 HGsamples= 108 107 111 106 108 10c 10a 109
+                 10d 10d 10a 10b 10e 109 10d 10f
+adc=7 LGsamples= 10b 10b 10b 10b 10b 10b 10b 10b
+                 10b 10b 10b 10b 10b 10b 10b 10b
+adc=7 HGsamples= 11d 11d 11d 11d 11d 11d 11d 11d
+                 11d 11d 11d 11d 11d 11d 11d 11d
+adc=8 LGsamples= fc fc fe fd fc fe fd fc
+                 fc ff fd fe fc fe fd fc
+adc=8 HGsamples= f8 f7 ed f6 f0 ef f1 f2
+                 f5 f9 f4 ef f0 f5 f3 f0
+adc=9 LGsamples= f6 f6 f6 f6 f6 f6 f6 f6
+                 f6 f6 f6 f6 f6 f6 f6 f6
+adc=9 HGsamples= 104 104 104 104 104 104 104 104
+                 104 104 104 104 104 104 104 104
+adc=10 LGsamples= 10b 10a 109 109 108 109 109 10a
+                  10a 10d 10a 108 10a 10b 108 10a
+adc=10 HGsamples= 10b 109 10a 109 107 10a 104 105
+                  10a 107 109 104 109 103 10a 107
+adc=11 LGsamples= eb eb eb eb eb eb eb eb
+                  eb eb eb eb eb eb eb eb
+adc=11 HGsamples= 10a 10a 10a 10a 10a 10a 10a 10a
+                  10a 10a 10a 10a 10a 10a 10a 10a
+ nevnt=0   errors=-    elapsed=0.000 hrs
+ nevnt=50   errors=-    elapsed=0.000 hrs

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DB7 Register Console</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='db7_reg.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark">DB7</div>
+      <div>
+        <h1>Register Console</h1>
+        <p class="source">map: <code>vhdl/db6_design_package.vhd</code> · methods: <code>db7_modregval.py</code></p>
+      </div>
+    </div>
+
+    <form id="conn-form" class="conn" autocomplete="off">
+      <label>ControlHub IP
+        <input id="controlhub-ip" type="text" spellcheck="false"
+               value="{{ default_controlhub_ip }}" placeholder="192.168.0.201">
+      </label>
+      <label>TilePPr IP
+        <input id="ppr-ip" type="text" spellcheck="false"
+               value="{{ default_ppr_ip }}" placeholder="192.168.0.3">
+      </label>
+      <button type="submit" id="btn-connect">Connect</button>
+      <button type="button" id="btn-disconnect" disabled>Disconnect</button>
+      <div class="status" id="conn-status">
+        <span class="led" id="led"></span>
+        <span id="fw-label">not connected</span>
+      </div>
+    </form>
+  </header>
+
+  <section class="toolbar">
+    <div class="seg" role="group" aria-label="Minidrawer">
+      <span class="seg-label">MD</span>
+      <button type="button" class="md-btn active" data-md="1">1</button>
+      <button type="button" class="md-btn" data-md="2">2</button>
+      <button type="button" class="md-btn" data-md="3">3</button>
+      <button type="button" class="md-btn" data-md="4">4</button>
+    </div>
+    <div class="seg" role="group" aria-label="FPGA">
+      <span class="seg-label">FPGA</span>
+      <button type="button" class="fpga-btn active" data-fpga="">Broadcast</button>
+      <button type="button" class="fpga-btn" data-fpga="A">A</button>
+      <button type="button" class="fpga-btn" data-fpga="B">B</button>
+    </div>
+    <div class="seg tabs" role="tablist">
+      <button type="button" class="tab active" data-bus="rx">ConfigBus RX</button>
+      <button type="button" class="tab" data-bus="tx">TX / Status</button>
+      <button type="button" class="tab" data-bus="xadc">XADC</button>
+    </div>
+    <div class="toolbar-actions">
+      <button type="button" id="btn-read">Read selected</button>
+      <button type="button" id="btn-read-all">Read all</button>
+      <button type="button" id="btn-sync-clear">Sync clear</button>
+      <input id="filter" type="search" placeholder="Filter name / addr…">
+    </div>
+  </section>
+
+  <main class="layout">
+    <section class="table-wrap">
+      <table id="reg-table">
+        <thead>
+          <tr>
+            <th class="num">#</th>
+            <th>Name</th>
+            <th class="num">HW</th>
+            <th>Side A</th>
+            <th>Side B</th>
+            <th>Decoded</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <aside class="panel">
+      <h2 id="sel-title">No register selected</h2>
+      <p class="note" id="sel-note">Click a row. Writes use the VHDL index; reads use the LUT hardware address.</p>
+
+      <form id="write-form" class="write">
+        <div class="grid2">
+          <label>Value
+            <input id="write-value" type="text" spellcheck="false" placeholder="0x0">
+          </label>
+          <label>Mask (−z / zorro)
+            <input id="write-mask" type="text" spellcheck="false" placeholder="0 (all bits)">
+          </label>
+          <label>Aim bit (−a)
+            <input id="write-aim" type="text" spellcheck="false" placeholder="optional">
+          </label>
+          <label>BCID (−b, sync only)
+            <input id="write-bcid" type="text" spellcheck="false" placeholder="e.g. 2246">
+          </label>
+        </div>
+        <label class="check">
+          <input id="write-sync" type="checkbox"> Synchronous write (−s)
+        </label>
+        <div class="write-actions">
+          <button type="submit" id="btn-write">Write</button>
+          <span class="hint" id="write-hint">FPGA broadcast · MD 1</span>
+        </div>
+      </form>
+
+      <h3>Bits 31…0</h3>
+      <div id="bit-grid" class="bit-grid"></div>
+      <div id="field-list" class="field-list"></div>
+
+      <h3>Log</h3>
+      <pre id="log" class="log"></pre>
+    </aside>
+  </main>
+
+  <script src="{{ url_for('static', filename='db7_reg.js') }}"></script>
+</body>
+</html>

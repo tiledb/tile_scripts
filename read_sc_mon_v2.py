@@ -27,7 +27,7 @@ class color:
 
 # -------------------- IPBUS --------------------
 controlhub_ipaddress = "192.168.0.201"
-ppr_ipaddress = "192.168.0.2"
+ppr_ipaddress = "192.168.0.3"
 ppr = IPbus(controlhub_ipaddress, ppr_ipaddress)
 fw_ver = ppr.ReadVal(1)
 print(f"Connected to PPr with IP: {ppr_ipaddress}, FW version: {hex(fw_ver)}\n")
@@ -63,12 +63,22 @@ while True:
     running_time = ppr.DB_Read_Val(md, lut_tx_address[c_stb_running_time_status])
     db_reg_buff = ppr.DB_Read_Val(md, lut_tx_address[c_stb_pgood_reg])
 
+    ku_dna = [
+        (dna_data_array[0][0] << 64) |
+        (dna_data_array[1][0] << 32) |
+        dna_data_array[2][0],
+        (dna_data_array[0][1] << 64) |
+        (dna_data_array[1][1] << 32) |
+        dna_data_array[2][1]
+    ]
+
     ku_lines = []
     # Format KU FPGA A
     ku_lines.append(
         f"KU FPGA A -> DNA0: {dna_data_array[0][0]} ~ {dna_data_array[0][0]} "
         f"DNA1: {dna_data_array[1][0]} ~ {dna_data_array[1][0]} "
-        f"DNA2: {dna_data_array[2][0]} ~ {dna_data_array[2][0]} "
+        f"DNA2: {dna_data_array[2][0]} ~ {dna_data_array[2][0]} \n" 
+        f"DNA_HEX: {hex(ku_dna[0])} \n"
         f"Running: {running_time[0]} ~ {running_time[0]} "
         f"Side: {(db_reg_buff[0]>>27)&0b1} Switches: {(db_reg_buff[0]>>28)&0b1111}"
     )
@@ -76,7 +86,8 @@ while True:
     ku_lines.append(
         f"KU FPGA B -> DNA0: {dna_data_array[0][1]} ~ {dna_data_array[0][1]} "
         f"DNA1: {dna_data_array[1][1]} ~ {dna_data_array[1][1]} "
-        f"DNA2: {dna_data_array[2][1]} ~ {dna_data_array[2][1]} "
+        f"DNA2: {dna_data_array[2][1]} ~ {dna_data_array[2][1]} \n"
+        f"DNA_HEX: {hex(ku_dna[1])} \n"
         f"Running: {running_time[1]} ~ {running_time[1]} "
         f"Side: {(db_reg_buff[1]>>27)&0b1} Switches: {(db_reg_buff[1]>>28)&0b1111}"
     )

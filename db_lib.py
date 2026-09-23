@@ -561,10 +561,11 @@ char_line_clear = '\x1b[2K'
 def format_number(number):
         number_buffer = 0
         number_str=str(number)
-        if number_str.find('b')!=-1:
-                number_buffer=int(number,2)
-        elif number_str.find('x')!=-1:
+        # Check hex before binary: values like 0xabc contain a 'b' hex digit.
+        if number_str.find('x')!=-1:
                 number_buffer=int(number,16)
+        elif number_str.find('b')!=-1:
+                number_buffer=int(number,2)
         else:
                 number_buffer=int(number)
 

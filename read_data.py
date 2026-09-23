@@ -7,11 +7,11 @@ import plotext as tplt
 # ------------------ CONFIG ------------------
 
 HostIPaddressServer = "192.168.0.201"
-PPrIPaddressServer  = "192.168.0.2"
+PPrIPaddressServer  = "192.168.0.3"
 
 nsamp = 16
 nchanperMD = 12
-nMD = 4
+nMD = 1
 firstMD = 0
 
 bcid_l1a = 2246

@@ -249,7 +249,6 @@ def cis_readout(ppr, feb, gain=0, DACcharge=2000, nsamp=16, nchanperMD=12, nMD=2
     for md in range(firstMD, firstMD + nMD):
         for adc in range(nchanperMD):
             feb.set_switches_noise(md, dbside, feb=adc)
-
         feb.set_CIS_BCID_settings(md, dbside, BCID_charge, BCID_discharge, gain)
 
     # DACcharge SWEEP
@@ -307,12 +306,10 @@ def cis_readout(ppr, feb, gain=0, DACcharge=2000, nsamp=16, nchanperMD=12, nMD=2
 
 # ------------------ RUN CIS READOUT -------------------
 
-the_gain = 1
-
 all_hg_data, all_lg_data, all_hg_peaks, all_lg_peaks, \
 all_hg_centers, all_lg_centers, all_hg_fwhm, all_lg_fwhm, \
 all_hg_pedestal, all_lg_pedestal = cis_readout(
-    ppr, feb, gain=the_gain, DACcharge=2000, nsamp=nsamp,
+    ppr, feb, gain=1, DACcharge=2000, nsamp=nsamp,
     nchanperMD=nchanperMD, nMD=nMD, firstMD=firstMD, dbside=dbside
 )
 
